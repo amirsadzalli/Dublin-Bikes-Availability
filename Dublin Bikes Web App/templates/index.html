@@ -1,0 +1,434 @@
+<html>
+<head>
+    
+<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='bikefinder.css') }}">
+<script src="http://maps.google.com/maps/api/js?key=AIzaSyDDP-CkEcaBamF7DSlIgncplV3tiA6AkHY" type="text/javascript"></script>
+<script type="text/javascript" src="http://code.jquery.com/jquery-2.1.4.min.js"></script>
+<script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    
+<script>
+
+var myCentre; // centre of map
+var myarray; // results from Dublin Bikes API
+var map; // variable for maps
+var mapProps; // properties of map
+var marker; // marker on map
+
+// function to find location of user - called immediately
+function findLocation() {
+    if (!navigator.geolocation) { // if location can't be found
+        myCentre = new google.maps.LatLng(53.344007,-6.266802); //default location
+        return;
+    }
+    function found(position) { // if found, set centre of map to user's location
+        myCentre = new google.maps.LatLng(position.coords.latitude,
+                                         position.coords.longitude);
+    }
+    navigator.geolocation.getCurrentPosition(found);
+}
+findLocation();
+
+// CHART
+// Load the Visualization API and the corechart package.
+google.charts.load('current', {'packages':['corechart']});
+
+function drawChart(bikes, stands, date) { // function that draws chart
+    // date parameter currently unused - might change
+    document.getElementById('response').style.display = "block"; // displays response div on webpage
+    
+    // Create the data table.
+    var data = new google.visualization.DataTable(); // create data object
+    data.addColumn('string', 'Day');
+    data.addColumn('number', 'Bikes');
+    data.addColumn('number', 'Stands');
+    data.addRows([
+        ['Monday', bikes[0], stands[0]],
+        ['Tuesday', bikes[1], stands[1]],
+        ['Wednesday', bikes[2], stands[2]],
+        ['Thursday', bikes[3], stands[3]],
+        ['Friday', bikes[4], stands[4]],
+        ['Saturday', bikes[5], stands[5]],
+        ['Sunday', bikes[6], stands[6]]
+    ]);
+
+    // Set chart options
+    var options = {'title':'Average Bikes/Stands per Day of Week',
+                   'width':680,
+                   'height':300};
+
+    // create instance of chart, in 'graph' div on webpage - this is within 'response' div
+    var chart = new google.visualization.LineChart(document.getElementById('graph'));
+    chart.draw(data, options); //pass data object and options used for drawing graph
+}
+
+function initialise(x) { // called when user chooses which functionality they want (bikes near me,
+    // spaces near me, search station by address)
+    // x is to indicate which option they chose
+    var key = document.getElementById("key"); // explains markers
+    var keyinfo;
+
+    //This is the live API request to get the markers and the information
+    var xmlhttp = new XMLHttpRequest();
+    var url = "https://api.jcdecaux.com/vls/v1/stations?contract=dublin&apiKey=a3a8a01538007e05924b81ebd579bbb053efe1da";
+    xmlhttp.onreadystatechange = function () {
+        if (xmlhttp.readyState == 4 && xmlhttp.status == 200) {
+            myFunction(xmlhttp.responseText);
+        }
+    }
+    xmlhttp.open("GET", url, true);
+    xmlhttp.send();
+
+    // Called if API request is successful - the response is passed in as parameter
+    function myFunction(response) {
+        console.log(typeof (response));
+        myarray = JSON.parse(response); // turning response into JSON object
+        console.log(myarray[0].position.lat);
+
+        // map properties
+        mapProps = {
+            center: myCentre, // users location, or default location
+            zoom: 16,
+            mapTypeId: google.maps.MapTypeId.ROADMAP
+        };
+        map = new google.maps.Map(document.getElementById("googleMap"), mapProps); // initialise map
+
+        // user's current selection of functionality
+        var current = document.getElementById("current");
+        var searchbox = document.getElementById("formdiv"); // the search div on 'search by station address' option
+        var mapcontainer = document.getElementById("googleMap");
+        if (x == 1) { // user chose 'bikes near me'
+            document.getElementById("moreinfo").style.display = "block"; // show 'more information' button
+            searchbox.style.display = "none";
+            searchbox.style.height = "0px";
+            mapcontainer.style.height = "371px";
+            
+            // to decide which colour marker to use, based on available bikes
+            for (var i = 0; i < myarray.length; i++) {
+                var icon;
+                if (myarray[i].available_bikes < 5) {
+                    icon = "{{ url_for('static', filename='red.png') }}";
+                } else if (myarray[i].available_bikes < 15) {
+                    icon = "{{ url_for('static', filename='orange.png') }}";
+                } else {
+                    icon = "{{ url_for('static', filename='green.png') }}";
+                }
+                
+                // setting map marker for particular station
+                marker = new google.maps.Marker({
+                    position: new google.maps.LatLng(myarray[i].position.lat, myarray[i].position.lng),
+                    icon: icon,
+                    map: map,
+                    station_number: myarray[i].number
+                });
+                
+                // This is setting up the info windows on map
+                var infowindow = new google.maps.InfoWindow();
+
+                // if marker is clicked.....
+                google.maps.event.addListener(marker, 'click', (function (marker, i) {
+                    return function () {
+                        console.log('marker', this);
+                        $.ajax({ // request to database for station info to use on graph
+                            url : '/get_station_info/' + this.station_number,
+                            method: "GET",
+                            success: function(data) {
+                                console.log('received from flask:', data.stations[0].available_bikes, data.stations[0].available_bike_stands);
+                                var bikeList = []; // array to hold average bikes per day
+                                for (var i = 0; i < 7; i++) {
+                                    bikeList[i] = data.stations[i].available_bikes;
+                                }
+                                var standList = []; // array to hold average free spaces per day
+                                for (var i = 0; i < 7; i++) {
+                                    standList[i] = data.stations[i].available_bike_stands;
+                                }
+                                var dateTime = []; // array to hold dates the data was taken from
+                                for (var i = 0; i < 7; i++) {
+                                    var date = new Date(data.stations[i].date * 1000); // converting date from unix time
+                                    dateTime[i] = date;
+                                }
+//                                console.log(bikeList,standList,dateTime)
+                                drawChart(bikeList, standList, dateTime); // passing info to be drawn on chart
+                            }
+                        });
+
+                        // contents of info window for each marker
+                        infowindow.setContent("<p>Address: " + myarray[i].address + "<br />" +
+                                              "Total Stands: " + myarray[i].bike_stands + "<br />" +
+                                              "Available Bikes: " + myarray[i].available_bikes + "<br />" +
+                                              "Status: " + myarray[i].status + "</p>");
+                        infowindow.open(map, marker);
+                    }
+                })(marker, i));
+            }
+
+            // explanation of markers for 'bikes near me'
+            keyinfo = '<p><img src="{{ url_for('static', filename='green.png') }}" alt="green bike icon">: 15 or more bikes available<br />' +
+                '<img src="{{ url_for('static', filename='orange.png') }}" alt="orange bike icon">: 5-14 bikes available<br />' +
+                '<img src="{{ url_for('static', filename='red.png') }}" alt="red bike icon">: Less than 5 bikes available</p>';
+            key.innerHTML = keyinfo;
+
+            // 'current' id used to style button of currently selected functionality
+            if (!current.innerHTML.match("Bikes Near Me")) {
+                if (current.innerHTML.match("Spaces Near Me")) {
+                    current.id = "spaces"; // change id from 'current' to 'spaces'
+                } else if (current.innerHTML.match("Search By Station Address")) {
+                    current.id = "address"; // change id from 'current' to 'address'
+                    ;
+                } else {
+                    current.removeAttribute("id"); // if 'current' id was on placeholder, remove without assigning new id
+                }
+                document.getElementById("bikes").id = "current";
+            }
+        } else if (x == 2) { // user chose 'spaces near me'
+            document.getElementById("moreinfo").style.display = "block"; // show 'more information' button
+            searchbox.style.display = "none";
+            searchbox.style.height = "0px";
+            mapcontainer.style.height = "371px";
+
+            // to decide which colour marker to use, based on available bike stands
+            for (var i = 0; i < myarray.length; i++) {
+                var icon;
+                if (myarray[i].available_bike_stands < 5) {
+                    icon = "{{ url_for('static', filename='finishred.png') }}";
+                } else if (myarray[i].available_bike_stands < 15) {
+                    icon = "{{ url_for('static', filename='finishorange.png') }}";
+                } else {
+                    icon = "{{ url_for('static', filename='finishgreen.png') }}";
+                }
+                
+                // setting map marker for particular station
+                marker = new google.maps.Marker({
+                    position: new google.maps.LatLng(myarray[i].position.lat, myarray[i].position.lng),
+                    icon: icon,
+                    map: map,
+                    station_number: myarray[i].number
+                });
+
+                // This is setting up the info windows on map
+                var infowindow = new google.maps.InfoWindow();
+                
+                // if marker is clicked.....
+                google.maps.event.addListener(marker, 'click', (function (marker, i) {
+                    return function () {
+                        console.log('marker', this);
+                        $.ajax({ // request to database for station info to use on graph
+                            url : '/get_station_info/' + this.station_number,
+                            method: "GET",
+                            success: function(data) {
+                                console.log('received from flask:', data.stations[0].available_bikes, data.stations[0].available_bike_stands);
+                                var bikeList = []; //  array to hold average bikes per day
+                                for (var i = 0; i < 7; i++) {
+                                    bikeList[i] = data.stations[i].available_bikes;
+                                }
+                                var standList = []; // array to hold average free spaces per day
+                                for (var i = 0; i < 7; i++) {
+                                    standList[i] = data.stations[i].available_bike_stands;
+                                }
+                                var dateTime = []; // array to hold dates the data was taken from
+                                for (var i = 0; i < 7; i++) {
+                                    var date = new Date(data.stations[i].date * 1000); // converting date from unix time
+                                    dateTime[i] = date;
+                                }
+//                                console.log(bikeList,standList,dateTime)
+                                drawChart(bikeList, standList, dateTime); // passing info to be drawn on chart
+                            }
+                        });
+                        
+                        // contents of info window for each marker
+                        infowindow.setContent("<p>Address: " + myarray[i].address + "<br />" +
+                                              "Total Stands: " + myarray[i].bike_stands + "<br />" +
+                                              "Available Bike Stands: " + myarray[i].available_bike_stands + "<br />" +
+                                              "Status: " + myarray[i].status + "</p>");
+                        infowindow.open(map, marker);
+                    }
+                })(marker, i));
+            }
+
+            // explanation of markers for 'spaces near me'
+            keyinfo = '<p><img src="{{ url_for('static', filename='finishgreen.png') }}" alt="green finish icon">: 15 or more bike stands available<br />' +
+                '<img src="{{ url_for('static', filename='finishorange.png') }}" alt="orange finish icon">: 5-14 bike stands available<br />' +
+                '<img src="{{ url_for('static', filename='finishred.png') }}" alt="red finish icon">: Less than 5 bike stands available</p>';
+            key.innerHTML = keyinfo;
+            
+            // 'current' id used to style button of currently selected functionality
+            if (!current.innerHTML.match("Spaces Near Me")) {
+                if (current.innerHTML.match("Bikes Near Me")) {
+                    current.id = "bikes"; // change id from 'current' to 'bikes'
+                } else if (current.innerHTML.match("Search By Station Address")) {
+                    current.id = "address"; // change id from 'current' to 'address'
+                } else {
+                    current.removeAttribute("id"); // if 'current' id was on placeholder, remove without assigning new id
+                }
+                document.getElementById("spaces").id = "current";
+            }
+        } else if (x == 3) { // search by address
+            var datalistData = ""; // string to hold html code of list of stations for search bar
+            // for loop to add html and stations to list
+            for (var i = 0; i < myarray.length; i++) {
+                datalistData += '<option value="';
+                datalistData += myarray[i].address;
+                datalistData += '">';
+                datalistData += myarray[i].address;
+                datalistData += '</option>';
+            }
+            console.log(typeof datalistData);
+            document.getElementById("datalist").innerHTML = datalistData; // insert datalist html into webpage
+
+            document.getElementById("moreinfo").style.display = "block";
+            searchbox.style.display = "block";
+            searchbox.style.height = "60px";
+            mapcontainer.style.height = "311px"; // adjust height of map container to account for space taken by search box
+
+            // explanation of marker for 'search by station address'
+            keyinfo = '<p><img src="{{ url_for('static', filename='searchicon.png') }}" alt="searched station icon">: The location of the station you searched</p>';
+            key.innerHTML = keyinfo;
+
+            // 'current' id used to style button of currently selected functionality
+            if (!current.innerHTML.match("Search By Station Address")) {
+                if (current.innerHTML.match("Spaces Near Me")) {
+                    current.id = "spaces"; // change id from 'current' to 'spaces'
+                } else if (current.innerHTML.match("Bikes Near Me")) {
+                    current.id = "bikes";// change id from 'current' to 'bikes'
+                } else {
+                    current.removeAttribute("id"); // if 'current' id was on placeholder, remove without assigning new id
+                }
+                document.getElementById("address").id = "current";
+            }
+        }
+        console.log(current.innerHTML); // debugging buttons - problem with "current" id
+    }
+}
+
+// function to handle users request for station in 'search by station address'
+function searchForm(form) {
+    var stationIndex; // variable to hold index of user's requested station in response from Dublin Bikes API
+    var correctSearch = false; // changed to true if user's search term matches a station name
+    for (var i = 0; i < myarray.length; i++) { // loop checking if search term matches known station name
+        if (myarray[i].address == form.stationaddresses.value) {
+            stationIndex = i;
+            correctSearch = true;
+        }
+    }
+    if (correctSearch == false) { // if user enters incorrect address
+        alert("Address not recognised. Please try again or select option from list");
+    } else {
+        marker.setMap(null); // remove existing markers  from map, so that only the marker of the searched station is on map
+        // set centre of map to location of station
+        var newCentre = new google.maps.LatLng(myarray[stationIndex].position.lat, myarray[stationIndex].position.lng);
+        console.log(newCentre);
+        marker = new google.maps.Marker({
+            position: newCentre,
+            icon: "{{ url_for('static', filename='searchicon.png') }}", // icon specific to 'search by station address
+            map: map
+        });
+
+        // This is setting up the info box
+        var infowindow = new google.maps.InfoWindow();
+        
+        // if marker is clicked.....
+        google.maps.event.addListener(marker, 'click', (function () {
+            console.log('marker', this);
+            $.ajax({ // request to database for station info to use on graph
+                url : '/get_station_info/' + myarray[stationIndex].number,
+                method: "GET",
+                success: function(data) {
+                    console.log('received from flask:', data.stations[0].available_bikes, data.stations[0].available_bike_stands);
+                    var bikeList = []; //  array to hold average bikes per day
+                    for (var i = 0; i < 7; i++) {
+                        bikeList[i] = data.stations[i].available_bikes;
+                    }
+                    var standList = []; //  array to hold average free spaces per day
+                    for (var i = 0; i < 7; i++) {
+                        standList[i] = data.stations[i].available_bike_stands;
+                    }
+                    var dateTime = []; // array to hold dates the data was taken from
+                    for (var i = 0; i < 7; i++) {
+                        var date = new Date(data.stations[i].date * 1000); // converting dates from unix time
+                        dateTime[i] = date;
+                    }
+                    console.log(bikeList,standList,dateTime)
+                    drawChart(bikeList, standList, dateTime); // passing info to be drawn on chart
+                }
+            });
+            
+            // contents of info window for marker
+            infowindow.setContent("<p>Address: " + myarray[stationIndex].address + "<br />" +
+                                  "Total Stands: " + myarray[stationIndex].bike_stands + "<br />" +
+                                  "Available Bikes: " + myarray[stationIndex].available_bikes + "<br />" +
+                                  "Available Bike Stands: " + myarray[stationIndex].available_bike_stands + "<br />" +
+                                  "Status: " + myarray[stationIndex].status + "</p>");
+            infowindow.open(map, marker);
+        }));
+        
+        // centre map on location of station that the user requested
+        map.setCenter(newCentre);
+    }
+}
+
+// function for toggling between showing and not showing the more information box
+function moreInfo() {
+    var extrainfo = document.getElementById("extrainfo");
+    if (extrainfo.style.display == 'block') {
+        extrainfo.style.display = 'none';
+    } else {
+        extrainfo.style.display = 'block';
+    }
+}
+
+</script>
+</head>
+
+<header>
+<div>
+    <img src="../static/Dublin_Bikes_logo.jpg" alt="Dublin Bikes Logo" /> <!-- logo at top of page -->
+</div>
+<h1>BikeFinder <span>Dublin</span></h1>
+</header>
+
+<body>
+<!-- Container for option bar, map, 'more information' button and, in 'search by station address', search bar -->
+<div id="container">
+    <nav><!-- navigation bar -->
+        <ul>
+            <!-- buttons to switch between functionality. Call initialise function with different arguments, depending on button -->
+            <li id="bikes" onclick="initialise(1)">Bikes Near Me</li>
+            <li id="spaces" onclick="initialise(2)">Spaces Near Me</li>
+            <li id="address" onclick="initialise(3)">Search By Station Address</li>
+        </ul>
+    </nav>
+    
+    <div id="formdiv"><!-- div containing search bar for 'search by station address' -->
+        <form>
+            <input list="datalist" name="stationaddresses"><!-- list for station names to be added to by JavaScript -->
+            <!-- id necessary to link datalist to input -->
+            <datalist id="datalist"><!-- won't work in safari according to W3 Schools -->
+            </datalist>
+
+            <input id="submit" type="button" value="Search" onclick="searchForm(this.form)"><!-- search button -->
+        </form>
+    </div>
+    
+    <div id="googleMap"></div><!-- div to contain map -->
+    
+    <div id="moreinfo"><!-- div for 'more information' button -->
+        <input id="infobutton" type="button" value="More Information" onclick="moreInfo()">
+    </div>
+</div>
+
+<div id="extrainfo"><!-- container for extra information: key div -->
+    <div id="key"></div>
+</div>
+
+<p id="current"></p> <!-- placeholder for current ID -->
+
+<div id="response"><!-- container for graph created when map marker is clicked -->
+    <div id="graph"></div>
+</div>
+
+</body>
+
+<footer>
+    <p>Copyright 2016 Stephen Murphy, Kevin Fitzpatrick, Keith Kennedy. All Rights Reserved.</p>
+</footer>
+
+</html>
